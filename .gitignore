@@ -47,3 +47,12 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# R project file
+cocoa_flows.Rproj
+
+# folders
+output
+output/*
+data
+data/*
