@@ -1,21 +1,20 @@
-# diet footprints
+# cocoa flows
 
 library(Matrix)
 library(tidyverse)
 library(data.table)
-library(sf)
-library(fmsb)
-library(tidyverse)
-library(magrittr)
-library(ggmosaic)
-library(rworldmap)
-library(wbstats)
-library(ggplot2)
-library(ggtext)
-library(ggthemes)
-library(patchwork)
-library(viridis)
 library(openxlsx)
+# library(magrittr)
+# library(sf)
+# library(fmsb)
+# library(ggmosaic)
+# library(rworldmap)
+# library(wbstats)
+# library(ggplot2)
+# library(ggtext)
+# library(ggthemes)
+# library(patchwork)
+# library(viridis)
 
 # load footprint functions
 source("R/footprint_functions.R")
@@ -35,8 +34,8 @@ lang = "en" # "de
 take_prod_result = FALSE
 
 # load FABIO data
-Y <- readRDS(paste0("/mnt/nfs_fineprint/tmp/fabio/v",vers,"/Y.rds"))
-X <- readRDS(file=paste0("/mnt/nfs_fineprint/tmp/fabio/v",vers,"/X.rds")) # total output
+Y <- readRDS(paste0("/mnt/nfs_fineprint/tmp/fabio/v",vers,"/losses/Y.rds"))
+X <- readRDS(file=paste0("/mnt/nfs_fineprint/tmp/fabio/v",vers,"/losses/X.rds")) # total output
 
 # load and prepare extensions
 E <- readRDS(file=paste0("/mnt/nfs_fineprint/tmp/fabio/v",vers,"/E.rds")) # environmental extensions
@@ -92,7 +91,6 @@ E_all <- Map(function(e, e_biodiv, e_ghg, e_luh, e_energy, e_live, e_other, e_gh
 }, E, E_biodiv, E_ghg_agg, E_luh2_agg, E_ghg_energy, E_ghg_live, E_ghg_other, E_ghg_pb)
 #}
 rm(E, E_biodiv, E_ghg_agg, E_luh2_agg, E_ghg_energy, E_ghg_pb, E_ghg, E_luh)
-saveRDS(E_all, paste0("./data/v",vers,"/E_all.rds"))
 
 # read region classification
 regions <- fread(file=paste0("/mnt/nfs_fineprint/tmp/fabio/v",vers,"/regions.csv"))
@@ -106,7 +104,7 @@ nrcom <- nrow(items)
 # create index of all region-commodity combinations
 fabio_index <- data.table(area_code = rep(regions$code, each = nrcom),
                           iso3c = rep(regions$iso3c, each = nrcom),
-                          area = rep(regions$name, each = nrcom),
+                          area = rep(regions$area, each = nrcom),
                           continent = rep(regions[[ifelse(vers == "1.1", "continent", "continent")]], each = nrcom),
                           comm_code = rep(items$comm_code, nrreg),
                           item_code = rep(items$item_code, nrreg),
@@ -124,56 +122,13 @@ if (lang == "de") {
 }
 
 
-Y_yr <- merge(cbind(fabio_index, as.data.table(as.matrix(Y[[as.character(yr)]][,-1]))), 
-              items_group[,.(item_code,comm_group_plot)], by = c("item_code"), all.x = TRUE, sort = FALSE)
+Y_yr <- as.data.table(as.matrix(Y[[as.character(yr)]]))
+# colnames(Y_yr) <- substr(colnames(Y_yr), regexpr("_", colnames(Y_yr))+1, 100)
+# colnames(Y_yr) <- rep(regions$continent, each = 9)
+# Y_yr <- agg(Y_yr)
+Y_yr <- cbind(fabio_index, Y_yr)
 setkey(Y_yr, area_code, comm_code)
 
-# colors for food groups
-food_cols <- openxlsx::read.xlsx("inst/items_conc.xlsx", sheet = "colors_alt", colNames = FALSE)
-food_cols_vect <- food_cols$X3
-if (lang == "de") names(food_cols_vect) <- food_cols$X1
-if (lang == "en") names(food_cols_vect) <- food_cols$X2
-
-# population
-cbs_pop <- readRDS(paste0("./data/v",vers,"/cbs_pop.rds"))[year == yr, .(area_code, area, value = value*1000)]
-
-
-## per-capita planetary bondaries from Willett et al
-#pbs <- c(
-#  #"land_ha" = 13 * 1e6 / 10e9 * 100,
-#  "landuse" = 13 * 1e6 / 10e9 * 1e6, # in m2
-#  "blue" = 2500 / 10e9 * 1e9, # in m3
-#  "ghg_all" = 5 * 1e9 / 10e9, # in t
-#  "biodiv" = 10 / 10e9 * 10e6, # in 10-6 species
-#  "n_application" = 90 * 1e9 / 10e9, # in kg
-#  "p_application" = 8 * 1e9 / 10e9 # in kg
-#)
-
-# global planetary boundaries (lower bound - upper bound)
-pbs_global <- rbind(
-  #"boundary" = c("lower", "upper"),
-  "landuse" = c(11, 13, 15),
-  "blue" = c(1000, 2500, 4000),
-  "ghg_all" = c(4.7, 5, 5.4),
-  "biodiv" = c(1, 10, 80),
-  "n_application" = c(65, 90, 130),
-  "p_application" = c(6, 8, 16)
-)
-colnames(pbs_global) <- c("lower", "boundary",  "upper")
-
-# transform into per-capita values in appropriate units
-per_cap_factor <- c(  
-  "landuse" = 1e6 / 10e9 * 1e6, # from mio km2 to m2 pc
-  "blue" = 1e9 / 10e9  , # from km3 to m3 pc
-  "ghg_all" =  1e9 / 10e9, # from Gt to t pc
-  #"biodiv" = 1e6 / 10e9, # from species to 10-6 species pc
-  #"biodiv" = 1 / 10e9, # from species to species pc
-  "biodiv" = 1 * (sum(unique(items_biodiv$number))/1e6) / 10e9, # from species per MSY to species pc
-  "n_application" = 1e9 / 10e9, # from Tg to kg pc
-  "p_application" = 1e9 / 10e9 # from Tg to kg pc
-)
-
-pbs <- pbs_global*per_cap_factor
 
 #-------------------------------------------------------#
 # ---------------- Calculate Footprints  ---------------
@@ -183,131 +138,17 @@ cat("Calculate footprints for version", vers, "and year", yr, "\n")
 
 
 # run calculations (see function library)
-fp_all <- footprint_all(allocation = "value", year = yr, y = Y_yr, X = X, E = E_all, index = fabio_index, ext = "p_application",
-                    v = vers, take.result = take_prod_result, result.dir = "data", result.suffix = "phosphorus")
+fp_continents <- footprint_continent(product = "Cocoa Beans and products", allocation = "value", year = yr, y = Y_yr, X = X, E = E_all, 
+                                     index = fabio_index, ext = "biomass", v = vers, result.dir = "data", result.suffix = "cocoa")
 
-for(iso in regions$iso3c){
-  print(iso)
-  fp <- footprint(country = iso,  allocation = "value", year = yr, y = Y_yr, X = X, E = E_all, index = fabio_index, 
-                  v = vers, take.result = take_prod_result, result.dir = "data", result.suffix = "phosphorus")
-}
+fp <- footprint(country = "PER", product = "Cocoa Beans and products", consumption = "all", allocation = "value", 
+                year = yr, y = Y_yr, X = X, E = E_all, index = fabio_index, v = vers, result.dir = "data", result.suffix = "cocoa")
 
-results <- data.table()
-for(iso in regions$iso3c[1:10]){
-  print(iso)
-  results <- rbind(results, readRDS(paste0("./output","/fp_v",vers,"_",year,"_", result.suffix,"_",iso,".rds")))
-}
+write_csv(fp, "output/cocoa_flows.csv")
 
 
 
-results <- fp_all %>% 
-  group_by(country_origin, group_origin, country_consumer) %>% 
-  summarize(p = sum(p_application))
 
-results_from <- fp_all %>% 
-  group_by(group_origin, country = country_origin) %>% 
-  summarize(from = sum(p_application))
-
-results_to <- fp_all %>% 
-  group_by(group_origin, country = country_consumer) %>% 
-  summarize(to = sum(p_application))
-
-results <- merge(results_from, results_to, by = c("group_origin", "country"))
-
-results <- results %>% 
-  ungroup() %>% 
-  mutate(net = from - to) %>% 
-  dcast(country ~ group_origin)
-
-write.csv2(results, "./output/p_flows.csv")
-
-
-results <- readRDS(paste0("./output","/fp_v",vers,"_",year,"_", result.suffix,"_","CHN.rds"))
-results <- results %>% 
-  group_by(group_origin, group_target) %>% 
-  summarize(p = sum(p_application)) %>% 
-  dcast(group_origin ~ group_target)
-
-write.csv2(results, "./output/p_flows_chn.csv")
-
-
-#######.
-# NOTE:
-#for future versions of this script, it will be better to set an lapply here the generates the results/visualizations for each diet, instead of repeating the code for each diet
-######.
-
-# add total emission footprints (Note: not necessary if extension would be aggregated already)
-#fp_sq[, ghg_all := ghg + luh]
-#fp_eat[, ghg_all := ghg + luh]
-#fp_epo[, ghg_all := ghg + luh]
-
-# remove pastures from landuse
-fp_sq$landuse[fp_sq$item_origin=="Grazing"] <- 0
-fp_eat$landuse[fp_eat$item_origin=="Grazing"] <- 0
-fp_epo$landuse[fp_epo$item_origin=="Grazing"] <- 0
-
-# convert landuse from ha to m2
-fp_sq$landuse <- fp_sq$landuse * 10000
-fp_eat$landuse <- fp_eat$landuse * 10000
-fp_epo$landuse <- fp_epo$landuse * 10000
-
-# add group names for plots
-fp_sq <- merge(fp_sq, items_group[,.(item, comm_group_plot)], by.x = c("item_target"), by.y = c("item"), all.x = TRUE, sort = FALSE)
-fp_eat <- merge(fp_eat, items_group[,.(item, comm_group_plot)], by.x = c("item_target"), by.y = c("item"), all.x = TRUE, sort = FALSE)
-fp_epo <- merge(fp_epo, items_group[,.(item, comm_group_plot)], by.x = c("item_target"), by.y = c("item"), all.x = TRUE, sort = FALSE)
-
-all.equal(fp_sq$ghg_all, fp_sq$ghg_energy + fp_sq$ghg_live + fp_sq$ghg_other + fp_sq$luh)
-all.equal(fp_sq$ghg, fp_sq$ghg_energy + fp_sq$ghg_live + fp_sq$ghg_other)
-all.equal(fp_sq$ghg_pb, fp_sq$ghg_live + fp_sq$ghg_other)
-
-fp_sq <-  fp_sq[comm_group_plot %in% groups_cons,] 
-fp_eat <- fp_eat[comm_group_plot %in% groups_cons,]
-fp_epo <- fp_epo[comm_group_plot %in% groups_cons,]
-
-# save results
-if (write){ 
-  saveRDS(fp_sq, paste0("./data/v",vers,"/fp_sq_",yr,".rds"))
-  #   saveRDS(fp_eat, paste0("./plots/v",vers,"/fp_eat_",yr,".rds"))
-  #   saveRDS(fp_epo, paste0("./plots/v",vers,"/fp_epo_",yr,".rds"))
-}
-
-# aggregate as desired (see function library)
-fp_sq_agg <- fp_aggregate(fp_sq, aggregate_by = c("country_consumer"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-fp_eat_agg <- fp_aggregate(fp_eat, aggregate_by = c("country_consumer"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-fp_epo_agg <- fp_aggregate(fp_epo, aggregate_by = c("country_consumer"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-
-#fp_sq_agg_crop <- fp_aggregate(fp_sq[group_origin != "Grazing",], aggregate_by = c("country_consumer"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-#fp_eat_agg_crop <- fp_aggregate(fp_eat[group_origin != "Grazing",], aggregate_by = c("country_consumer"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-#fp_epo_agg_crop <- fp_aggregate(fp_epo[group_origin != "Grazing",], aggregate_by = c("country_consumer"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-
-fp_sq_group  <- fp_aggregate(fp_sq, aggregate_by = c("country_consumer", "comm_group_plot"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-fp_eat_group <- fp_aggregate(fp_eat, aggregate_by = c("country_consumer", "comm_group_plot"), indicators = c("production", "landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-fp_epo_group <- fp_aggregate(fp_epo, aggregate_by = c("country_consumer", "comm_group_plot"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-
-fp_sq_continent_group <- fp_aggregate(fp_sq, aggregate_by = c("continent_origin", "comm_group_plot"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-fp_eat_continent_group <- fp_aggregate(fp_eat, aggregate_by = c("continent_origin", "comm_group_plot"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-fp_epo_continent_group <- fp_aggregate(fp_epo, aggregate_by = c("continent_origin", "comm_group_plot"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-
-fp_sq_continent <- fp_aggregate(fp_sq, aggregate_by = c("continent_origin"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-
-
-fp_sq_country <- fp_aggregate(fp_sq, aggregate_by = c("country_consumer", "country_origin"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-fp_eat_country <- fp_aggregate(fp_eat, aggregate_by = c("country_consumer", "country_origin"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-fp_epo_country <- fp_aggregate(fp_epo, aggregate_by = c("country_consumer", "country_origin"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-
-fp_sq_country_group <- fp_aggregate(fp_sq, aggregate_by = c("country_consumer", "country_origin",  "comm_group_plot"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-fp_eat_country_group <- fp_aggregate(fp_eat, aggregate_by = c("country_consumer", "country_origin",  "comm_group_plot"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-fp_epo_country_group <- fp_aggregate(fp_epo, aggregate_by = c("country_consumer", "country_origin",  "comm_group_plot"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-
-fp_sq_continent_group_orig <- fp_aggregate(fp_sq, aggregate_by = c("country_consumer", "continent_origin",  "item_origin"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-fp_sq_country_item <- fp_aggregate(fp_sq, aggregate_by = c("country_consumer", "country_origin",  "item_target"), indicators = c("landuse", "blue", "ghg", "luh", "ghg_pb", "ghg_all", "biomass", "biodiv", "n_application", "p_application"))
-
-
-# determine indicator-specific limits for plots to be used across all scenarios
-fp_limits <- rbind(fp_sq_country, fp_eat_country, fp_epo_country) %>% 
-  filter(country_origin != "AUT") %>% 
-  group_by(country_consumer) %>% 
-  summarise(across(landuse:ghg_all, max))
 
 #-------------------------------------------------------#
 # ---------------- Create Visualizations ---------------

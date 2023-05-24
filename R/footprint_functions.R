@@ -20,13 +20,12 @@
 # allocation = one of "value" or "mass"
 # year = the year of interest
 
-footprint <- function(country = "AUT", consumption = "food", allocation = "value", 
+footprint <- function(country = "PER", product = "Cocoa and products", consumption = "all", allocation = "value", 
                       year, y, X = X, E = E, v = vers, index, 
                       take.result = FALSE, result.dir = "data", result.suffix = ""){
 
   # extract data
   Xi <- X[, as.character(year)]
-  #Yi <- Y[[as.character(year)]]
   Ei <- E[[as.character(year)]]
   
   if(!take.result){
@@ -44,66 +43,60 @@ footprint <- function(country = "AUT", consumption = "food", allocation = "value
   E_int <- cbind(Ei[,1:7], E_int)
 
   # extract relevant final demand vector
-  Y_country <- y[, 8:(ncol(y)-1)]
-  colnames(Y_country) <- substr(colnames(Y_country), 1, str_locate(colnames(Y_country), "_")[,"start"]-1)
-  colnames(Y_country) <- regions$iso3c[match(colnames(Y_country), regions$code)]
-  Y_country <- as.matrix(Y_country)[, colnames(Y_country) == country]
-  Y_country <- as.numeric(agg(Y_country))
+  if(consumption != "all"){
+    Y_target <- as.matrix(y)[, grepl(consumption, colnames(y))]
+    colnames(Y_target) <- rep(regions$area, each = ncol(Y_target)/192)
+    Y_target <- agg(as.matrix(Y_target))
+  } else {
+    Y_target <- y[, 9:ncol(y)]
+    colnames(Y_target) <- rep(regions$area, each = ncol(Y_target)/192)
+    # colnames(Y_target) <- substr(colnames(Y_target), 1, str_locate(colnames(Y_target), "_")[,"start"]-1)
+    Y_target <- agg(as.matrix(Y_target))
+  }
+  
   
   # compute footprints
   short_index <- paste0(index$iso3c, "_", index$item)
   
   # production footprint (= production of each commodity triggered by consumption of each commodity in Y_target)
-  #FP <- t(t(MP) * as.vector(as.matrix(Y_country[,consumption])))
   if (!take.result){
-    FP <- t(t(L) * Y_country)
-    colnames(FP) <- rownames(FP) <- short_index <- paste0(index$iso3c, "_", index$item)
-    saveRDS(FP, paste0(result.dir,"/v",vers,"/fp_",year,"_",result.suffix,"_",country,".rds"))
+    FP <- L[index$iso3c == source & index$item == product, ] %*% Y_target
+    # colnames(FP) <- rownames(FP) <- short_index <- paste0(index$iso3c, "_", index$item)
+    # saveRDS(FP, paste0(result.dir,"/v",vers,"/fp_",year,"_",result.suffix,"_",country,".rds"))
   } else if (file.exists(paste0(result.dir,"/v",vers,"/fp_",year,"_",result.suffix,"_",country,".rds"))){
     FP <- readRDS(paste0(result.dir,"/v",vers,"/fp_",year,"_",result.suffix,"_",country,".rds"))
   } else {
     stop("no production footprint result exsiting under", paste0(result.dir,"/v",vers,"/fp_",result.suffix,"_",country,".rds"))
   }
   FP <- as(FP, "dgTMatrix")
-  results <- data.table(origin=rownames(FP)[FP@i + 1], target=colnames(FP)[FP@j + 1], production =FP@x)
-  results[,`:=`(country_origin = substr(origin,1,3),
-                item_origin = substr(origin,5,100),
-                country_target = substr(target,1,3),
-                item_target = substr(target,5,100),
-                country_consumer = country,
-                year = year)]
+  results <- data.table(origin = rownames(FP)[FP@i + 1], target = colnames(FP)[FP@j + 1], value = FP@x)
+  results <- data.table(origin = rownames(FP)[FP@i + 1], target = colnames(FP)[FP@j + 1], value = FP@x)
+  results[,`:=`(iso_origin = source,
+                item_origin = item,
+                consumer = target,
+                year = year,
+                value = value)]
 
   # remove L and FP matrices from memory (they are large!)
   if(!take.result) rm(L)
   rm(FP, Xi, Ei); gc()
 
   # calculate environmental footprints for all extensions from production footprint
-  match_origin = match(results$origin, short_index)
-  match_target = match(results$target, short_index)
-
-  results[, `:=` (origin = NULL, target = NULL) ]
-
-  results[,`:=`(p_application   = production * E_int$p_application[match_origin])]
-
-  # add direct consumption of each item for reference (optional)
-  #results[, direct_consumption := Y_target[match_origin]]
-
-  # add auxiliary info on origin and target commodities
-  results[,`:=`(group_origin  = index$comm_group[match_origin],
-                group_target  = index$comm_group[match_target],
-                iso_origin = index$iso3c[match_origin],
-                continent_origin  = index$continent[match_origin])]
-  results[country_origin==country, continent_origin := country]
-
+  env <- t(replicate(nrow(results), as.numeric(E_int[area == regions$area[regions$iso3c==source] & item == product, landuse:ghg_pb])))
+  colnames(env) <- colnames(E_int[, landuse:ghg_pb])
+  results <- cbind(results, results$value * env)
+  
   # reorder columns
   results <- results %>%
-    relocate(c(production, p_application), .after = continent_origin) %>%
-    relocate(c(iso_origin, continent_origin), .after = country_origin) %>%
-    relocate(group_origin, .after = item_origin) %>%
-    relocate(group_target, .after = item_target)
+    select(-value, -target)
 
-  saveRDS(results, paste0("./output","/fp_v",vers,"_",year,"_", result.suffix,"_",country,".rds"))
+  # add auxiliary info on origin and target commodities
+  results[,`:=`(continent = index$continent[match(results$consumer, index$area)])]
   
+  # reorder columns
+  results <- results %>%
+    relocate(continent, .after = consumer)
+
   return(results)
 }
 
@@ -116,13 +109,12 @@ footprint <- function(country = "AUT", consumption = "food", allocation = "value
 # year = the year of interest
 # ext = environmental extension
 
-footprint_all <- function(consumption = "all", allocation = "value", 
-                      year, y, X = X, E = E, v = vers, ext = c("p_application"), index, 
-                      take.result = FALSE, result.dir = "data", result.suffix = ""){
+footprint_continent <- function(product = "Cocoa Beans and products", source = "PER", consumption = "all", 
+                                allocation = "value", year, y, X = X, E = E, v = vers, ext = c("biomass"), 
+                                index, take.result = FALSE, result.dir = "data", result.suffix = ""){
   
   # extract data
   Xi <- X[, as.character(year)]
-  #Yi <- Y[[as.character(year)]]
   Ei <- E[[as.character(year)]]
   
   if(!take.result){
@@ -141,9 +133,11 @@ footprint_all <- function(consumption = "all", allocation = "value",
   
   if(consumption != "all"){
     Y_target <- as.matrix(y)[, grepl(consumption, colnames(y))]
+    colnames(Y_target) <- rep(regions$continent, each = ncol(Y_target)/192)
   } else {
-    Y_target <- y[, 8:(ncol(y)-1)]
-    colnames(Y_target) <- substr(colnames(Y_target), 1, str_locate(colnames(Y_target), "_")[,"start"]-1)
+    Y_target <- y[, 9:ncol(y)]
+    colnames(Y_target) <- rep(regions$continent, each = ncol(Y_target)/192)
+    # colnames(Y_target) <- substr(colnames(Y_target), 1, str_locate(colnames(Y_target), "_")[,"start"]-1)
     Y_target <- agg(as.matrix(Y_target))
   }
   
@@ -153,48 +147,37 @@ footprint_all <- function(consumption = "all", allocation = "value",
   # production footprint (= production of each commodity triggered by consumption of each commodity in Y_target)
   #FP <- t(t(MP) * as.vector(as.matrix(Y_country[,consumption])))
   if (!take.result){
-    FP <- L %*% Y_target
-    rownames(FP) <- short_index <- paste0(index$iso3c, "_", index$item)
-    saveRDS(FP, paste0(result.dir,"/v",vers,"/fp_",result.suffix,"_",year,".rds"))
+    FP <- L[index$iso3c == source & index$item == product, ] %*% Y_target#[index$item == item, ]
+    # FP <- index
+    # for(r in colnames(Y_target)){
+    #   FP[, (r) := L[index$iso3c == source & index$item == product, ] * Y_target[, r]]
+    # }
+    # saveRDS(FP, paste0(result.dir,"/v",vers,"/fp_",result.suffix,"_",year,".rds"))
   } else if (file.exists(paste0(result.dir,"/v",vers,"/fp_",result.suffix,"_",year,".rds"))){
     FP <- readRDS(paste0(result.dir,"/v",vers,"/fp_",result.suffix,"_",year,".rds"))
   } else {
     stop("no production footprint result exsiting under", paste0(result.dir,"/v",vers,"/fp_",result.suffix,"_",year,".rds"))
   }
   FP <- as(FP, "dgTMatrix")
-  results <- data.table(origin=rownames(FP)[FP@i + 1], target=colnames(FP)[FP@j + 1], production =FP@x)
-  results[,`:=`(iso_origin = substr(origin,1,3),
-                item_origin = substr(origin,5,100),
-                country_consumer = target,
-                year = year)]
+  results <- data.table(origin = rownames(FP)[FP@i + 1], target = colnames(FP)[FP@j + 1], value = FP@x)
+  results[,`:=`(iso_origin = source,
+                item_origin = item,
+                consumer = target,
+                year = year,
+                value = value)]
   
   # remove L and FP matrices from memory (they are large!)
   if(!take.result) rm(L)
   rm(FP, Xi, Ei); gc()
   
   # calculate environmental footprints for all extensions from production footprint
-  match_origin = match(results$origin, short_index)
-  match_target = match(results$country_consumer, regions$code)
-  
-  results[, `:=` (origin = NULL, target = NULL) ]
-  results[,`:=`(p_application   = production * E_int$p_application[match_origin])]
-  
-  # add auxiliary info on origin and target commodities
-  results[,`:=`(group_origin  = index$comm_group[match_origin],
-                continent_origin  = index$continent[match_origin],
-                iso_consumer = regions$iso3c[match_target],
-                continent_consumer  = regions$continent[match_target],
-                country_origin = regions$area[match(results$iso_origin, regions$iso3c)],
-                country_consumer = regions$area[match_target])]
+  env <- t(replicate(nrow(results), as.numeric(E_int[area == regions$area[regions$iso3c==source] & item == product, landuse:ghg_pb])))
+  colnames(env) <- colnames(E_int[, landuse:ghg_pb])
+  results <- cbind(results, results$value * env)
   
   # reorder columns
   results <- results %>%
-    relocate(c(iso_origin, continent_origin), .after = country_origin) %>%
-    relocate(c(production, p_application), .after = continent_origin) %>%
-    relocate(group_origin, .after = item_origin) %>%
-    relocate(year, .after = group_origin) %>% 
-    relocate(c(iso_consumer, continent_consumer), .after = country_consumer)
-  
+    select(-value, -target)
   
   return(results)
 }
